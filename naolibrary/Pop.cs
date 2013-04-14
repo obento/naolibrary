@@ -13,6 +13,7 @@ using System.Text.RegularExpressions;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Globalization;
+using System.Net.Security;
 
 namespace NaoLibrary.Net
 {
@@ -21,14 +22,14 @@ namespace NaoLibrary.Net
         private string hostname;
         private int port = 110;
         private TcpClient popTcp;
-        private NetworkStream popStream;
+        private Stream popStream;
         public static readonly string Terminate = "\r\n";
         private bool loggingMode = false;
         private LoginMode loginMode = LoginMode.PopLogin;
         private Socket popSocket = null;
         private int socketTimeOutMilliSecond = 30000;
         private bool closed = false;
-
+        
         /// <summary>
         /// コンストラクタ
         /// </summary>
@@ -48,7 +49,7 @@ namespace NaoLibrary.Net
         /// <returns>サーバからの応答</returns>
         public string Login(string user, string pass)
         {
-            NetworkStream ns = this.PopStream;
+            Stream ns = this.PopStream;
             string mes = ReceiveMultiLineMessage(ns, true);
  
             if (this.Success(mes))
@@ -62,7 +63,13 @@ namespace NaoLibrary.Net
                     poplgn.Result = mes;
                     allclr = poplgn.Login(user, pass);
                 }
-                else if(this.LoginMode == LoginMode.PopLogin)
+                else if (this.LoginMode == Net.LoginMode.UsePop3s)
+                {
+                    poplgn = new Pop3sLogin(this);
+                    poplgn.Result = mes;
+                    allclr = poplgn.Login(user, pass);
+                }
+                else if (this.LoginMode == LoginMode.PopLogin)
                 {
                     poplgn = new PopLogin(this);
                     poplgn.Result = mes;
@@ -394,7 +401,7 @@ namespace NaoLibrary.Net
         /// ReceiveMultiLineMessageメソッド
         /// </summary>
         /// <returns>result</returns>
-        internal string ReceiveMultiLineMessage(NetworkStream nstream, bool isSingleLine)
+        internal string ReceiveMultiLineMessage(Stream nstream, bool isSingleLine)
         {
             try
             {
@@ -915,13 +922,20 @@ namespace NaoLibrary.Net
         /// <summary>
         /// 内部で使用するNetwrokStream
         /// </summary>
-        private NetworkStream PopStream
+        private Stream PopStream
         {
             get
             {
                 if (popStream == null)
                 {
-                    return new NetworkStream(PopSocket);
+                    if (LoginMode == Net.LoginMode.UsePop3s)
+                    {
+                        SslStream ssl = new SslStream(new NetworkStream(PopSocket));
+                        ssl.AuthenticateAsClient(HostName);
+                        popStream = ssl;
+                    }
+                    else
+                        popStream = new NetworkStream(PopSocket);
                 }
                 return popStream;
             }
@@ -941,7 +955,7 @@ namespace NaoLibrary.Net
         /// </summary>
         /// <param name="stream">使用するNetworkStream</param>
         /// <returns>戻り値</returns>
-        public static string ReceiveLine(NetworkStream stream)
+        public static string ReceiveLine(Stream stream)
         {
             bool stop = false;
             int length = 0;
@@ -1004,8 +1018,9 @@ namespace NaoLibrary.Net
                 string message = sb.ToString().TrimEnd();
 
                 this.LoggingMessage("C: " + message);
-                this.PopSocket.Send(Encoding.ASCII.GetBytes(message + Pop.Terminate));
-                NetworkStream ns = this.PopStream;
+                Stream ns = this.PopStream;
+                byte[] mes = Encoding.ASCII.GetBytes(message + Pop.Terminate);
+                ns.Write(mes, 0, mes.Length);
                 return this.ReceiveMultiLineMessage(ns, !endOfComma);
             }
             catch (Exception ex)
@@ -1748,6 +1763,39 @@ namespace NaoLibrary.Net
     }
 
     ///
+    ///<summary>標準popサーバへのログイン class</summary> 
+    ///
+    public class Pop3sLogin : PopLogin
+    {
+       public Pop3sLogin(Pop parent) : base(parent)
+        {}
+
+        public override bool Login(string userName, string phase)
+        {
+            try
+            {
+                StringReader sReader = new StringReader(this.Result);
+                string result = sReader.ReadLine();
+
+                string response = parent.SendMessage(false, PopCommand.USER, userName);
+
+                if (!response.StartsWith("+OK"))
+                    return false;
+
+                sReader = new StringReader(parent.SendMessage(false, PopCommand.PASS, phase));
+                result = sReader.ReadLine();
+                bool allClr = result.StartsWith("+OK");
+
+                return allClr;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
+
+    ///
     ///<summary>APOP 用のログインクラス</summary>
     ///
     public class ApopLogin : PopLogin
@@ -1794,14 +1842,13 @@ namespace NaoLibrary.Net
         }
     }
 
-
-    [Flags]
     public enum LoginMode
     {
         err = -1,
         None = 0,
         PopLogin = 1,
-        UseApop = 2
+        UseApop = 2,
+        UsePop3s = 3
     }
 
 
