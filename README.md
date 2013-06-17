@@ -30,7 +30,7 @@ c# pop3 client
                 Console.WriteLine(mail.Subject);
                 string text = mail.GetMail();
 
-                Console.WriteLine(i.ToString() + " " + mail.GetMail());
+                Console.WriteLine(i.ToString() + " " + text);
             }
             
             pop.Logout();
